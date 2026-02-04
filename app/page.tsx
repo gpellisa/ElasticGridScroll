@@ -1,13 +1,6 @@
 "use client"
 
 import { useRef, useEffect, useState } from "react"
-import { gsap } from "gsap"
-import { ScrollTrigger } from "gsap/ScrollTrigger"
-
-// Register GSAP plugins
-if (typeof window !== "undefined") {
-  gsap.registerPlugin(ScrollTrigger)
-}
 
 // Image data for the grid
 const images = [
@@ -40,154 +33,181 @@ export default function ElasticGridScroll() {
   const gridRef = useRef<HTMLDivElement>(null)
   const [isLoading, setIsLoading] = useState(true)
   const currentColumnCountRef = useRef<number | null>(null)
-  const scrollTriggersRef = useRef<ScrollTrigger[]>([])
+  const cleanupRef = useRef<(() => void) | null>(null)
 
   // Lag configuration constants
   const baseLag = 0.15
   const lagScale = 0.08
 
   useEffect(() => {
-    const grid = gridRef.current
-    if (!grid) return
+    let isMounted = true
+    
+    const initGSAP = async () => {
+      const grid = gridRef.current
+      if (!grid || !isMounted) return
 
-    // Capture original grid items
-    const originalItems = Array.from(grid.querySelectorAll(".grid__item"))
-
-    const groupItemsByColumn = () => {
-      const gridStyles = window.getComputedStyle(grid)
-      const columnsRaw = gridStyles.getPropertyValue("grid-template-columns")
-      const numColumns = columnsRaw.split(" ").filter(Boolean).length
-      const columns: HTMLElement[][] = Array.from({ length: numColumns }, () => [])
-
-      grid.querySelectorAll(".grid__item").forEach((item, index) => {
-        columns[index % numColumns].push(item as HTMLElement)
-      })
-
-      return { columns, numColumns }
-    }
-
-    const clearGrid = () => {
-      // Kill existing ScrollTriggers
-      scrollTriggersRef.current.forEach(st => st.kill())
-      scrollTriggersRef.current = []
+      // Dynamic import of GSAP
+      const { gsap } = await import("gsap")
+      const { ScrollTrigger } = await import("gsap/ScrollTrigger")
       
-      // Remove column wrappers
-      grid.querySelectorAll(".grid__column").forEach((col) => col.remove())
-      
-      // Restore original items
-      originalItems.forEach((item) => {
-        gsap.set(item, { clearProps: "all" })
-        grid.appendChild(item)
-      })
-    }
+      gsap.registerPlugin(ScrollTrigger)
 
-    const buildGrid = (columns: HTMLElement[][], numColumns: number) => {
-      const fragment = document.createDocumentFragment()
-      const mid = (numColumns - 1) / 2
-      const columnContainers: { element: HTMLElement; lag: number }[] = []
+      if (!isMounted) return
 
-      columns.forEach((column, i) => {
-        const distance = Math.abs(i - mid)
-        const lag = baseLag + distance * lagScale
+      // Store ScrollTrigger instances for cleanup
+      const scrollTriggers: ScrollTrigger[] = []
 
-        const columnContainer = document.createElement("div")
-        columnContainer.className = "grid__column"
+      // Capture original grid items
+      const originalItems = Array.from(grid.querySelectorAll(".grid__item"))
 
-        column.forEach((item) => columnContainer.appendChild(item))
+      const groupItemsByColumn = () => {
+        const gridStyles = window.getComputedStyle(grid)
+        const columnsRaw = gridStyles.getPropertyValue("grid-template-columns")
+        const numColumns = columnsRaw.split(" ").filter(Boolean).length
+        const columns: HTMLElement[][] = Array.from({ length: numColumns }, () => [])
 
-        fragment.appendChild(columnContainer)
-        columnContainers.push({ element: columnContainer, lag })
-      })
-
-      grid.appendChild(fragment)
-      return columnContainers
-    }
-
-    const applyLagEffects = (columnContainers: { element: HTMLElement; lag: number }[]) => {
-      columnContainers.forEach(({ element, lag }) => {
-        // Create a ScrollTrigger-based parallax effect
-        const st = ScrollTrigger.create({
-          trigger: document.body,
-          start: "top top",
-          end: "bottom bottom",
-          scrub: lag * 2, // Use lag as scrub smoothing factor
-          onUpdate: (self) => {
-            const progress = self.progress
-            const scrollHeight = document.documentElement.scrollHeight - window.innerHeight
-            const offset = scrollHeight * progress * lag * 0.5
-            gsap.set(element, { y: -offset })
-          }
+        grid.querySelectorAll(".grid__item").forEach((item, index) => {
+          columns[index % numColumns].push(item as HTMLElement)
         })
-        scrollTriggersRef.current.push(st)
-      })
-    }
 
-    const init = () => {
-      clearGrid()
-      const { columns, numColumns } = groupItemsByColumn()
-      currentColumnCountRef.current = numColumns
-      const columnContainers = buildGrid(columns, numColumns)
-      applyLagEffects(columnContainers)
-      ScrollTrigger.refresh()
-    }
-
-    const getColumnCount = () => {
-      const styles = getComputedStyle(grid)
-      return styles.getPropertyValue("grid-template-columns").split(" ").filter(Boolean).length
-    }
-
-    const handleResize = () => {
-      const newColumnCount = getColumnCount()
-      if (newColumnCount !== currentColumnCountRef.current) {
-        init()
+        return { columns, numColumns }
       }
-    }
 
-    // Preload images
-    const preloadImages = () => {
-      const imageElements = grid.querySelectorAll(".grid__item-img")
-      let loadedCount = 0
-      const totalImages = imageElements.length
+      const clearGrid = () => {
+        // Kill existing ScrollTriggers
+        scrollTriggers.forEach(st => st.kill())
+        scrollTriggers.length = 0
+        
+        // Remove column wrappers
+        grid.querySelectorAll(".grid__column").forEach((col) => col.remove())
+        
+        // Restore original items
+        originalItems.forEach((item) => {
+          gsap.set(item, { clearProps: "all" })
+          grid.appendChild(item)
+        })
+      }
 
-      if (totalImages === 0) {
+      const buildGrid = (columns: HTMLElement[][], numColumns: number) => {
+        const fragment = document.createDocumentFragment()
+        const mid = (numColumns - 1) / 2
+        const columnContainers: { element: HTMLElement; lag: number }[] = []
+
+        columns.forEach((column, i) => {
+          const distance = Math.abs(i - mid)
+          const lag = baseLag + distance * lagScale
+
+          const columnContainer = document.createElement("div")
+          columnContainer.className = "grid__column"
+
+          column.forEach((item) => columnContainer.appendChild(item))
+
+          fragment.appendChild(columnContainer)
+          columnContainers.push({ element: columnContainer, lag })
+        })
+
+        grid.appendChild(fragment)
+        return columnContainers
+      }
+
+      const applyLagEffects = (columnContainers: { element: HTMLElement; lag: number }[]) => {
+        columnContainers.forEach(({ element, lag }) => {
+          const st = ScrollTrigger.create({
+            trigger: document.body,
+            start: "top top",
+            end: "bottom bottom",
+            scrub: lag * 2,
+            onUpdate: (self) => {
+              const progress = self.progress
+              const scrollHeight = document.documentElement.scrollHeight - window.innerHeight
+              const offset = scrollHeight * progress * lag * 0.5
+              gsap.set(element, { y: -offset })
+            }
+          })
+          scrollTriggers.push(st)
+        })
+      }
+
+      const init = () => {
+        clearGrid()
+        const { columns, numColumns } = groupItemsByColumn()
+        currentColumnCountRef.current = numColumns
+        const columnContainers = buildGrid(columns, numColumns)
+        applyLagEffects(columnContainers)
+        ScrollTrigger.refresh()
+      }
+
+      const getColumnCount = () => {
+        const styles = getComputedStyle(grid)
+        return styles.getPropertyValue("grid-template-columns").split(" ").filter(Boolean).length
+      }
+
+      const handleResize = () => {
+        const newColumnCount = getColumnCount()
+        if (newColumnCount !== currentColumnCountRef.current) {
+          init()
+        }
+      }
+
+      // Preload images
+      const preloadImages = () => {
+        return new Promise<void>((resolve) => {
+          const imageElements = grid.querySelectorAll(".grid__item-img")
+          let loadedCount = 0
+          const totalImages = imageElements.length
+
+          if (totalImages === 0) {
+            resolve()
+            return
+          }
+
+          imageElements.forEach((imgEl) => {
+            const bgImage = window.getComputedStyle(imgEl).backgroundImage
+            const urlMatch = bgImage.match(/url\(["']?([^"')]+)["']?\)/)
+            
+            if (urlMatch && urlMatch[1]) {
+              const img = new Image()
+              img.crossOrigin = "anonymous"
+              img.onload = img.onerror = () => {
+                loadedCount++
+                if (loadedCount >= totalImages) {
+                  resolve()
+                }
+              }
+              img.src = urlMatch[1]
+            } else {
+              loadedCount++
+              if (loadedCount >= totalImages) {
+                resolve()
+              }
+            }
+          })
+        })
+      }
+
+      // Setup cleanup function
+      cleanupRef.current = () => {
+        window.removeEventListener("resize", handleResize)
+        scrollTriggers.forEach(st => st.kill())
+      }
+
+      window.addEventListener("resize", handleResize)
+      
+      await preloadImages()
+      
+      if (isMounted) {
         setIsLoading(false)
         init()
-        return
       }
-
-      imageElements.forEach((imgEl) => {
-        const bgImage = window.getComputedStyle(imgEl).backgroundImage
-        const urlMatch = bgImage.match(/url\(["']?([^"')]+)["']?\)/)
-        
-        if (urlMatch && urlMatch[1]) {
-          const img = new Image()
-          img.onload = img.onerror = () => {
-            loadedCount++
-            if (loadedCount >= totalImages) {
-              setIsLoading(false)
-              init()
-            }
-          }
-          img.src = urlMatch[1]
-        } else {
-          loadedCount++
-          if (loadedCount >= totalImages) {
-            setIsLoading(false)
-            init()
-          }
-        }
-      })
     }
 
-    window.addEventListener("resize", handleResize)
-    
-    // Small delay to ensure DOM is ready
-    const timeout = setTimeout(preloadImages, 100)
+    initGSAP()
 
     return () => {
-      window.removeEventListener("resize", handleResize)
-      clearTimeout(timeout)
-      scrollTriggersRef.current.forEach(st => st.kill())
+      isMounted = false
+      if (cleanupRef.current) {
+        cleanupRef.current()
+      }
     }
   }, [])
 
